@@ -10,6 +10,7 @@ import multiprocessing
 from multiprocessing import Manager
 import Queue
 import time
+import re
 
 class queue_item(object):
     def __init__(self, item):
@@ -26,7 +27,7 @@ class gen_queue(object):
         self.num_workers = num_workers
 
     def get_processor(self):
-        return gen_queue.__process
+        return self.__process
         
     def start(self):
         for i in range(0,self.num_workers):      
@@ -47,8 +48,7 @@ class gen_queue(object):
         for i in range(0,self.num_workers):      
             self.workers[i].join()
 
-    @classmethod
-    def __process(cls, obj):
+    def __process(self, obj):
         print("Consume {0}".format(obj))
         
     @classmethod
@@ -76,10 +76,9 @@ class gen_queue(object):
 
 class my_queue(gen_queue):
     def get_processor(self):
-        return my_queue.__process
+        return self.__process
 
-    @classmethod
-    def __process(cls, obj):
+    def __process(self, obj):
         print("my_queue {0}".format(obj))
 
 class topic_config(object):
@@ -108,11 +107,15 @@ class gen_topic_queue(gen_queue):
         super(gen_topic_queue, self).stop()
 
     def get_processor(self):
-        return gen_topic_queue.__process
+        return self.__process
 
-    @classmethod
-    def __process(cls, obj):
-        print("gen_topic_queue {0}".format(obj))
+    def __process(self,obj):
+        #match topic and send to associated queue
+        for i in range(0,len(self.__topic_q)):
+            p = re.compile(self.__topic_q[i].keys()[0].replace(".","[.]"))
+            if p.match(obj.item['topic']) is not None:
+                self.__topic_q[i].values()[0].enqueue(obj)
+                break
 
 def main():
     print('Hello, World!')
@@ -124,7 +127,8 @@ def main():
     s.enqueue(5)
     s.stop()
     l = []
-    l.append(topic_config('.*', my_queue, 1))
+    l.append(topic_config('.q1.*', my_queue, 1))
+    l.append(topic_config('.q2.*', my_queue, 1))
     g = gen_topic_queue(l)
     g.start()
     g.enqueue({'topic':'.q1.data','process_name':'MY_Q1_PROCESS'})
