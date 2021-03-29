@@ -5,17 +5,21 @@ TODO: processing, on another process
 TODO: topic pattern match
 TODO: FIFO processing, option
 """
-
+import traceback
 import multiprocessing
 from multiprocessing import Manager
 import Queue
 import time
 import re
+import random
 
+_manager = Manager()
 class queue_item(object):
-    def __init__(self, item):
+    def __init__(self, item, await_support):
         self.item = item
-        self.done = Manager().Semaphore(1)
+        self.done = None
+        if await_support:
+            self.done = _manager.Semaphore(1)
 
 class gen_queue(object):
     def __init__(self,num_workers):
@@ -37,8 +41,9 @@ class gen_queue(object):
 
     def enqueue(self, obj, await=False):
         #create queue item and then enque
-        item = queue_item(obj)
-        item.done.acquire()
+        item = queue_item(obj, await)
+        if await:
+            item.done.acquire()
         self.q.put(item, False)
         if await:
             item.done.acquire()
@@ -58,10 +63,13 @@ class gen_queue(object):
                 obj = q.get(True,5)
                 try:
                     f_process(obj)
-                except:
-                    pass
+                except Exception as ex:
+                    print('Error Processing..')
+                    print(ex)
                 finally:
-                    obj.done.release()
+                    if obj.done is not None:
+                        obj.done.release()
+                    pass
 
             except Queue.Empty:
                 if all_done.value == 1:
@@ -70,6 +78,7 @@ class gen_queue(object):
             except Exception as ex:
                 print('Error')
                 print(ex)
+                traceback.print_stack()
                 break
             finally:
                 pass
@@ -79,7 +88,8 @@ class my_queue(gen_queue):
         return self.__process
 
     def __process(self, obj):
-        print("my_queue {0}".format(obj))
+        time.sleep(random.randint(1,5))
+        print("my_queue {0}".format(obj.item))
 
 class topic_config(object):
     def __init__(self, topic, handler_cls, num_workers):
@@ -119,21 +129,20 @@ class gen_topic_queue(gen_queue):
 
 def main():
     print('Hello, World!')
-    s = my_queue(3)
+    s = my_queue(2)
     s.start()
     s.enqueue(2)
     s.enqueue(3)
-    s.enqueue(4)
-    s.enqueue(5)
+    # s.enqueue(4)
+    # s.enqueue(5)
     s.stop()
-    l = []
-    l.append(topic_config('.q1.*', my_queue, 1))
-    l.append(topic_config('.q2.*', my_queue, 1))
-    g = gen_topic_queue(l)
-    g.start()
-    g.enqueue({'topic':'.q1.data','process_name':'MY_Q1_PROCESS'})
-    g.enqueue({'topic':'.q2.data','process_name':'MY_q2_PROCESS'}, True)
-    g.stop()
-    
+    # l = []
+    # l.append(topic_config('.q1.*', my_queue, 1))
+    # l.append(topic_config('.q2.*', my_queue, 1))
+    #g = gen_topic_queue(l)
+    # g.start()
+    # g.enqueue({'topic':'.q1.data','process_name':'MY_Q1_PROCESS'})
+    # g.enqueue({'topic':'.q2.data','process_name':'MY_q2_PROCESS'}, True)
+    # g.stop()
 if __name__ == "__main__":
     main()
