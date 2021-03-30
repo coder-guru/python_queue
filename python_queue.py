@@ -1,8 +1,6 @@
 """  
-TODO: AsynAwait execution
 TODO: One master queue , process on topic
 TODO: processing, on another process
-TODO: topic pattern match
 TODO: FIFO processing, option
 """
 import traceback
@@ -98,8 +96,8 @@ class topic_config(object):
         self.num_workers = num_workers
 
 class gen_topic_queue(gen_queue):
-    def __init__(self, topic_config_arr):
-        super(gen_topic_queue, self).__init__(1)
+    def __init__(self, topic_config_arr, num_workers=1):
+        super(gen_topic_queue, self).__init__(num_workers)
         self.__topic_q = []
         for topic in topic_config_arr:
             #create queues to handle each topic
@@ -124,25 +122,6 @@ class gen_topic_queue(gen_queue):
         for i in range(0,len(self.__topic_q)):
             p = re.compile(self.__topic_q[i].keys()[0].replace(".","[.]"))
             if p.match(obj.item['topic']) is not None:
-                self.__topic_q[i].values()[0].enqueue(obj)
+                self.__topic_q[i].values()[0].enqueue(obj.item)
                 break
 
-def main():
-    print('Hello, World!')
-    s = my_queue(2)
-    s.start()
-    s.enqueue(2)
-    s.enqueue(3)
-    # s.enqueue(4)
-    # s.enqueue(5)
-    s.stop()
-    # l = []
-    # l.append(topic_config('.q1.*', my_queue, 1))
-    # l.append(topic_config('.q2.*', my_queue, 1))
-    #g = gen_topic_queue(l)
-    # g.start()
-    # g.enqueue({'topic':'.q1.data','process_name':'MY_Q1_PROCESS'})
-    # g.enqueue({'topic':'.q2.data','process_name':'MY_q2_PROCESS'}, True)
-    # g.stop()
-if __name__ == "__main__":
-    main()
