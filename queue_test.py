@@ -72,13 +72,13 @@ class TestStringMethods(unittest.TestCase):
     def test_topic_queue_multi(self):
         try:
             q_config = []
-            q_config.append(topic_config('.q1.*', q1_topic_handler, 1))
-            q_config.append(topic_config('.q2.*', q2_topic_handler, 1))
+            q_config.append(topic_config('.q1.*', q1_topic_handler, 2))
+            q_config.append(topic_config('.q2.*', q2_topic_handler, 2))
             s = gen_topic_queue(q_config, 2)
             s.start()
             for i in range(0,10):
                 if i % 2 == 0:
-                    s.enqueue({'topic':'.q1.number','msg':i,}, False)
+                    s.enqueue({'topic':'.q1.number','msg':i,}, True)
                 else:
                     s.enqueue({'topic':'.q2.number','msg':i,}, False)
             s.stop()

@@ -28,22 +28,32 @@ class gen_queue(object):
             num_workers = 1
         self.num_workers = num_workers
 
+    # indicate whether this queue is forwarder(no real processing of data)
+    def is_forwarder(self):
+        return False
+
     def get_processor(self):
         return self.__process
         
     def start(self):
         for i in range(0,self.num_workers):      
-            p = multiprocessing.Process(target=gen_queue.__consume, args=(self.q,self.all_done,self.get_processor(),))
+            p = multiprocessing.Process(target=gen_queue.__consume, args=(self.q,self.all_done,self.get_processor(),self.is_forwarder()))
             self.workers.append(p)
             p.start()
 
     def enqueue(self, obj, await=False):
         #create queue item and then enque
-        item = queue_item(obj, await)
-        if await:
+        #check for nested queue items
+        queue_chaining = isinstance(obj, queue_item)
+        if queue_chaining:
+            print('using orig item')
+            item = obj
+        else:
+            item = queue_item(obj, await)
+        if item.done is not None and not queue_chaining:
             item.done.acquire()
         self.q.put(item, False)
-        if await:
+        if item.done is not None and not queue_chaining:
             item.done.acquire()
 
     def stop(self):
@@ -55,7 +65,7 @@ class gen_queue(object):
         print("Consume {0}".format(obj))
         
     @classmethod
-    def __consume(cls,q, all_done, f_process):
+    def __consume(cls,q, all_done, f_process,forwarder=False):
         while True:
             try:
                 obj = q.get(True,5)
@@ -65,7 +75,7 @@ class gen_queue(object):
                     print('Error Processing..')
                     print(ex)
                 finally:
-                    if obj.done is not None:
+                    if obj.done is not None and not forwarder:
                         obj.done.release()
                     pass
 
@@ -114,6 +124,9 @@ class gen_topic_queue(gen_queue):
             self.__topic_q[i].values()[0].stop()
         super(gen_topic_queue, self).stop()
 
+    def is_forwarder(self):
+        return True
+
     def get_processor(self):
         return self.__process
 
@@ -122,6 +135,7 @@ class gen_topic_queue(gen_queue):
         for i in range(0,len(self.__topic_q)):
             p = re.compile(self.__topic_q[i].keys()[0].replace(".","[.]"))
             if p.match(obj.item['topic']) is not None:
-                self.__topic_q[i].values()[0].enqueue(obj.item)
+                #queue item to repective queue. honor await request
+                self.__topic_q[i].values()[0].enqueue(obj, False)
                 break
 
