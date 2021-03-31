@@ -1,7 +1,5 @@
 """  
 TODO: One master queue , process on topic
-TODO: processing, on another process
-TODO: FIFO processing, option
 """
 import traceback
 import multiprocessing
@@ -46,7 +44,6 @@ class gen_queue(object):
         #check for nested queue items
         queue_chaining = isinstance(obj, queue_item)
         if queue_chaining:
-            print('using orig item')
             item = obj
         else:
             item = queue_item(obj, await)
@@ -138,4 +135,25 @@ class gen_topic_queue(gen_queue):
                 #queue item to repective queue. honor await request
                 self.__topic_q[i].values()[0].enqueue(obj, False)
                 break
+
+class timer_queue(gen_queue):
+    def __init__(self, num_seconds, msg, q):
+        self.num_seconds = num_seconds
+        self.msg = msg
+        self.target_q = q
+        super(timer_queue, self).__init__(1)
+
+    def start(self):
+        super(timer_queue, self).start()
+        self.enqueue(1, False)
+
+    def get_processor(self):
+        return self.__process
+
+    def __process(self,obj):
+        print('Timer msg delivery...')
+        self.target_q.enqueue(self.msg, False)
+        time.sleep(self.num_seconds)
+        if not self.all_done.value == 1:
+            self.enqueue(1, False)
 
