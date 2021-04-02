@@ -4,6 +4,7 @@ import time, random
 import os
 
 from python_queue import my_queue, gen_topic_queue, topic_config, gen_queue, timer_queue
+from python_queue import trace_queue
 
 class q1_topic_handler(gen_queue):
     def get_processor(self):
@@ -111,6 +112,22 @@ class TestStringMethods(unittest.TestCase):
             t = timer_queue(5,{'topic':'.q1.timer','msg':1,},s)
             t.start()
             time.sleep(20)
+            t.stop()
+            s.stop()
+        except Exception as ex:
+            print(ex)
+            self.fail(traceback.print_stack())
+
+    def test_queue_tracing(self):
+        try:
+            s = trace_queue(3)
+            t = my_queue(2)
+            t.set_trace
+            s.start()
+            t.set_trace(s)
+            t.start()
+            for i in range(0,10):
+                t.enqueue(i, False)
             t.stop()
             s.stop()
         except Exception as ex:

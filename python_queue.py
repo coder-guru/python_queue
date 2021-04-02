@@ -5,15 +5,17 @@ import traceback
 import multiprocessing
 from multiprocessing import Manager
 import Queue
-import time
+import time, datetime
 import re
 import random
+import uuid
 
 _manager = Manager()
 class queue_item(object):
     def __init__(self, item, await_support):
         self.item = item
         self.done = None
+        self.id = uuid.uuid4()
         if await_support:
             self.done = _manager.Semaphore(1)
 
@@ -25,6 +27,7 @@ class gen_queue(object):
         if num_workers <= 0:
             num_workers = 1
         self.num_workers = num_workers
+        self.trace_q = None
 
     # indicate whether this queue is forwarder(no real processing of data)
     def is_forwarder(self):
@@ -39,6 +42,9 @@ class gen_queue(object):
             self.workers.append(p)
             p.start()
 
+    def set_trace(self, trace_q):
+        self.trace_q = trace_q
+
     def enqueue(self, obj, await=False):
         #create queue item and then enque
         #check for nested queue items
@@ -47,6 +53,10 @@ class gen_queue(object):
             item = obj
         else:
             item = queue_item(obj, await)
+        # check if tracing is set
+        if self.trace_q is not None:
+            self.trace_q.enqueue(item, False)
+
         if item.done is not None and not queue_chaining:
             item.done.acquire()
         self.q.put(item, False)
@@ -106,10 +116,10 @@ class gen_topic_queue(gen_queue):
     def __init__(self, topic_config_arr, num_workers=1):
         super(gen_topic_queue, self).__init__(num_workers)
         self.__topic_q = []
-        for topic in topic_config_arr:
+        for topic_config in topic_config_arr:
             #create queues to handle each topic
-            q = topic.handler_cls(topic.num_workers)
-            self.__topic_q.append({topic.topic : q})
+            q = topic_config.handler_cls(topic_config.num_workers)
+            self.__topic_q.append({topic_config.topic : q})
 
     def start(self):
         super(gen_topic_queue, self).start()
@@ -129,12 +139,16 @@ class gen_topic_queue(gen_queue):
 
     def __process(self,obj):
         #match topic and send to associated queue
+        orphen_message = True
         for i in range(0,len(self.__topic_q)):
             p = re.compile(self.__topic_q[i].keys()[0].replace(".","[.]"))
             if p.match(obj.item['topic']) is not None:
                 #queue item to repective queue. honor await request
                 self.__topic_q[i].values()[0].enqueue(obj, False)
+                orphen_message = False
                 break
+        if orphen_message:
+            print("Unhandled topic: {0}".format(obj.item['topic']))
 
 class timer_queue(gen_queue):
     def __init__(self, num_seconds, msg, q):
@@ -157,3 +171,9 @@ class timer_queue(gen_queue):
         if not self.all_done.value == 1:
             self.enqueue(1, False)
 
+class trace_queue(gen_queue):
+    def get_processor(self):
+        return self.__process
+
+    def __process(self,obj):
+        print('{2} id:{0} msg:{1}'.format(obj.id,obj.item,datetime.datetime.now()))
