@@ -4,7 +4,7 @@ import time, random
 import os
 
 from python_queue import my_queue, gen_topic_queue, topic_config, gen_queue, timer_queue
-from python_queue import trace_queue
+from python_queue import trace_queue, message_loop, message_obj, message_handler
 
 class q1_topic_handler(gen_queue):
     def get_processor(self):
@@ -21,6 +21,13 @@ class q2_topic_handler(gen_queue):
     def __process(self, obj):
         v = obj.item['msg']
         print("q2_topic_handler - {0}".format(v))
+
+class my_handler(message_handler):
+    def handle(self,msg):
+        for i in range(0,5):
+            print('loop {0}'.format(i))
+            yield
+
 class TestStringMethods(unittest.TestCase):
 
     def test_one_worker(self):
@@ -129,6 +136,18 @@ class TestStringMethods(unittest.TestCase):
             for i in range(0,10):
                 t.enqueue(i, False)
             t.stop()
+            s.stop()
+        except Exception as ex:
+            print(ex)
+            self.fail(traceback.print_stack())
+
+    def test_message_loop(self):
+        try:
+            s = message_loop()
+            s.start()
+            for i in range(0,5):
+                s.enqueue(message_obj(None,my_handler()))
+            print('Enqueue Done!')
             s.stop()
         except Exception as ex:
             print(ex)

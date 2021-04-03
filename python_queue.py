@@ -177,3 +177,45 @@ class trace_queue(gen_queue):
 
     def __process(self,obj):
         print('{2} id:{0} msg:{1}'.format(obj.id,obj.item,datetime.datetime.now()))
+
+class message_obj(object):
+    def __init__(self, item, fn):
+        self.item = item
+        self.fn = fn
+
+#message handler base class
+class message_handler(object):
+    def handle(self, msg):
+        raise NotImplementedError       
+class message_loop(gen_queue):
+    def __init__(self):
+        self.execute_list = []
+        super(message_loop, self).__init__(1)
+
+    def get_processor(self):
+        return self.__process
+
+    def __process(self,obj):
+        #process all the messages
+        #add to list except, loop back message
+        if obj.item.fn is not None:
+            try:
+                self.execute_list.append(obj.item.fn.handle(obj.item.item))
+            except:
+                pass
+            finally:
+                pass
+
+        # process all
+        for generator in self.execute_list:
+            if obj is not None:
+                try:
+                    next(generator)
+                except StopIteration:
+                    self.execute_list.remove(generator)
+                finally:
+                    pass
+        # add loop back message, if there is pending messages to process
+        if len(self.execute_list) > 0:
+            self.enqueue(message_obj(None,None), False)
+
