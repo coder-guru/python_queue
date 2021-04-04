@@ -11,7 +11,7 @@ class q1_topic_handler(gen_queue):
         return self.__process
 
     def __process(self, obj):
-        time.sleep(random.randint(1,5))
+        time.sleep(random.randint(2,5))
         v = obj.item['msg']
         print("q1_topic_handler - {0}".format(v))
 class q2_topic_handler(gen_queue):
@@ -21,6 +21,7 @@ class q2_topic_handler(gen_queue):
     def __process(self, obj):
         v = obj.item['msg']
         print("q2_topic_handler - {0}".format(v))
+        print(len(gen_queue._all_queue))
 
 class my_handler(message_handler):
     def handle(self,msg):
@@ -34,8 +35,8 @@ class TestStringMethods(unittest.TestCase):
         try:
             s = my_queue(1)
             s.start()
-            s.enqueue(2)
-            s.enqueue(3)
+            s.enqueue(2,2)
+            s.enqueue(3,3)
             s.stop()
         except Exception as ex:
             print(ex)
@@ -46,7 +47,7 @@ class TestStringMethods(unittest.TestCase):
             s = my_queue(3)
             s.start()
             for i in range(0,10):
-                s.enqueue(i)
+                s.enqueue(i,i)
             s.stop()
         except Exception as ex:
             print(ex)
@@ -57,7 +58,7 @@ class TestStringMethods(unittest.TestCase):
             s = my_queue(2)
             s.start()
             for i in range(0,10):
-                s.enqueue(i, True)
+                s.enqueue(i,i, True)
             s.stop()
         except Exception as ex:
             print(ex)
@@ -70,7 +71,7 @@ class TestStringMethods(unittest.TestCase):
             s = gen_topic_queue(q_config, 1)
             s.start()
             for i in range(0,5):
-                s.enqueue({'topic':'.q1.number','num':i,}, False)
+                s.enqueue(i, {'topic':'.q1.number','num':i,}, False)
             s.stop()
         except Exception as ex:
             print(ex)
@@ -85,9 +86,9 @@ class TestStringMethods(unittest.TestCase):
             s.start()
             for i in range(0,10):
                 if i % 2 == 0:
-                    s.enqueue({'topic':'.q1.number','msg':i,}, True)
+                    s.enqueue(i,{'topic':'.q1.number','msg':i,}, True)
                 else:
-                    s.enqueue({'topic':'.q2.number','msg':i,}, False)
+                    s.enqueue(i,{'topic':'.q2.number','msg':i,}, False)
             s.stop()
         except Exception as ex:
             print(ex)
@@ -102,9 +103,9 @@ class TestStringMethods(unittest.TestCase):
             s.start()
             for i in range(0,10):
                 if i % 2 == 0:
-                    s.enqueue({'topic':'.q1.number','msg':i,}, False)
+                    s.enqueue(i,{'topic':'.q1.number','msg':i,}, False)
                 else:
-                    s.enqueue({'topic':'.q2.number','msg':i,}, False)
+                    s.enqueue(i,{'topic':'.q2.number','msg':i,}, False)
             s.stop()
         except Exception as ex:
             print(ex)
@@ -134,7 +135,7 @@ class TestStringMethods(unittest.TestCase):
             t.set_trace(s)
             t.start()
             for i in range(0,10):
-                t.enqueue(i, False)
+                t.enqueue(i, i, False)
             t.stop()
             s.stop()
         except Exception as ex:
@@ -146,8 +147,23 @@ class TestStringMethods(unittest.TestCase):
             s = message_loop()
             s.start()
             for i in range(0,5):
-                s.enqueue(message_obj(None,my_handler()))
+                s.enqueue(i,message_obj(None,my_handler()))
             print('Enqueue Done!')
+            s.stop()
+        except Exception as ex:
+            print(ex)
+            self.fail(traceback.print_stack())
+
+    def test_kill(self):
+        try:
+            q_config = []
+            q_config.append(topic_config('.q1.*', q1_topic_handler, 1))
+            s = gen_topic_queue(q_config, 1)
+            s.start()
+            s.enqueue(999,{'topic':'.q1.timer','msg':'Time To Kill',})
+            time.sleep(2)
+            gen_queue.all_queue_kill(999)
+            s.enqueue(999,{'topic':'.q1.timer','msg':'Time To Be Born',})
             s.stop()
         except Exception as ex:
             print(ex)
