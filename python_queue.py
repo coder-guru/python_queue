@@ -2,7 +2,7 @@
 TODO: Support Kill
 TODO: Support sending message to main publish queue
 """
-import traceback
+import traceback, sys
 import multiprocessing
 from multiprocessing import Manager
 import Queue
@@ -12,6 +12,12 @@ import random
 import uuid
 
 _manager = Manager()
+
+class message_status(object):
+    def __init__(self, success, error_msg):
+        self.success = success
+        self.error_msg = error_msg
+
 class queue_item(object):
     def __init__(self, key, item, await_support):
         if key is None:
@@ -58,7 +64,7 @@ class gen_queue(object):
         p = multiprocessing.Process(target=gen_queue.__consume, args=(worker_id, self.q,self.all_done \
                                 ,self.get_processor(),self.is_forwarder(),self._start_process, self._end_process))
         self.workers[worker_id] = {'worker':p,}
-        self.work_status[worker_id] = None
+        self.work_status[worker_id] = _manager.dict()
         p.start()
 
     def remove_worker(self, worker_id):
@@ -69,11 +75,10 @@ class gen_queue(object):
             worker['worker'].terminate()
             self.add_worker()
         except Exception as ex:
-            print('remove_worker() failed.')
-            print(ex)
+            gen_queue.trace_msg('remove_worker() failed.')
+            gen_queue.trace_msg(ex)
         finally:
             pass
-
 
     def set_trace(self, trace_q):
         self.trace_q = trace_q
@@ -95,6 +100,8 @@ class gen_queue(object):
         self.q.put(item, False)
         if item.done is not None and not queue_chaining:
             item.done.acquire()
+        #return status
+        #return item.status.value
 
     def stop(self):
         gen_queue._all_queue.remove(self)
@@ -105,41 +112,49 @@ class gen_queue(object):
     def _start_process(self, worker_id, key):
         try:
             self.lock.acquire()
-            self.work_status[worker_id] = key
+            self.work_status[worker_id].clear()
+            if key is not None:
+                self.work_status[worker_id][key] = 0
         except Exception as ex:
-            print('Start() ', ex)
+            gen_queue.trace_msg('_start_process() ', ex)
         finally:
             self.lock.release()
 
-    def _end_process(self, worker_id):
+    def _end_process(self, worker_id, key, status=0):
         try:
             self.lock.acquire()
-            self.work_status[worker_id] = None
+            self.work_status[worker_id][key] = status
         except Exception as ex:
-            print('End() ', ex)
+            gen_queue.trace_msg('_end_process() ', ex)
         finally:
             self.lock.release()
 
     def kill(self, key):
-        print('Kill recieved key {0}'.format(key))
+        gen_queue.trace_msg('Kill recieved key {0}'.format(key))
         killed = False
         self.lock.acquire()
         try:
             #find the worker that is processing
-            for worker_id, status_key in self.work_status.items():
-                if status_key is not None:
-                    if status_key == key: 
+            for worker_id, status in self.work_status.items():
+                if status is not None:
+                    if status.get(key, None) is not None: 
                         self.remove_worker(worker_id)
-                        print('Kill was successful!')
+                        gen_queue.trace_msg('Kill was successful!')
                         killed = True
                         break
         except Exception as ex:
-            print('Kill process error!', ex)
+            gen_queue.trace_msg('Kill process error!', ex)
         finally:
             self.lock.release()
         if killed:
             self.add_worker()
         return killed
+
+    @classmethod
+    def trace_msg(cls,msg, level=0):
+        if level > 0:
+            print(msg)
+        pass
 
     @classmethod
     def all_queue_kill(cls,key):
@@ -148,40 +163,50 @@ class gen_queue(object):
                 q.kill(key)
                 pass
             except Exception as ex:
-                print(ex)
+                gen_queue.trace_msg(ex)
             finally:
                 pass
         pass
 
     def __process(self, obj):
-        print("Consume {0}".format(obj))
+        gen_queue.trace_msg("Consume {0}".format(obj))
         
     @classmethod
     def __consume(cls,worker_id,q, all_done, f_process,forwarder=False,f_start=None,f_end=None):
+        f_start = None
+        f_end = None
         while True:
             try:
+                gen_queue.trace_msg('about to get queue')
                 obj = q.get(True,5)
+                gen_queue.trace_msg('done get queue')
                 try:
                     if f_start is not None:
                         f_start(worker_id,obj.key)
+                    gen_queue.trace_msg('about to process')
                     f_process(obj)
+                    gen_queue.trace_msg('done process')
                     if f_end is not None:
-                        f_end(worker_id)
+                        f_end(worker_id, obj.key, 0)
                 except Exception as ex:
-                    print('Error Processing..')
-                    print(ex)
+                    gen_queue.trace_msg('Inner Error Processing...', 4)
+                    gen_queue.trace_msg(ex,4)
+                    #set error attributes
+                    if f_end is not None:
+                        f_end(worker_id, obj.key, 1)
                 finally:
                     if obj.done is not None and not forwarder:
                         obj.done.release()
                     pass
 
             except Queue.Empty:
+                gen_queue.trace_msg('Queue Empty...')
                 if all_done.value == 1:
-                    print('Breaking out...')
+                    gen_queue.trace_msg('Breaking out...')
                     break 
             except Exception as ex:
-                print('Error')
-                print(ex)
+                gen_queue.trace_msg('Error Processing...', 4)
+                gen_queue.trace_msg(ex,4)
                 traceback.print_stack()
                 break
             finally:
@@ -193,7 +218,7 @@ class my_queue(gen_queue):
 
     def __process(self, obj):
         time.sleep(random.randint(1,5))
-        print("my_queue {0}".format(obj.item))
+        gen_queue.trace_msg("my_queue {0}".format(obj.item))
 
 class topic_config(object):
     def __init__(self, topic, handler_cls, num_workers):
@@ -237,7 +262,7 @@ class gen_topic_queue(gen_queue):
                 orphen_message = False
                 break
         if orphen_message:
-            print("Unhandled topic: {0}".format(obj.item['topic']))
+            gen_queue.trace_msg("Unhandled topic: {0}".format(obj.item['topic']))
 
 class timer_queue(gen_queue):
     def __init__(self, num_seconds, msg, q):
@@ -254,18 +279,18 @@ class timer_queue(gen_queue):
         return self.__process
 
     def __process(self,obj):
-        print('Timer msg delivery...')
-        self.target_q.enqueue(None, self.msg, False)
+        gen_queue.trace_msg('Timer msg delivery...')
+        self.target_q.enqueue(1, self.msg, False)
         time.sleep(self.num_seconds)
         if not self.all_done.value == 1:
-            self.enqueue(None,1, False)
+            self.enqueue(1,1, False)
 
 class trace_queue(gen_queue):
     def get_processor(self):
         return self.__process
 
     def __process(self,obj):
-        print('{2} id:{0} msg:{1}'.format(obj.id,obj.item,datetime.datetime.now()))
+        gen_queue.trace_msg('{2} id:{0} msg:{1}'.format(obj.id,obj.item,datetime.datetime.now()))
 
 class message_obj(object):
     def __init__(self, item, fn):
@@ -287,11 +312,14 @@ class message_loop(gen_queue):
     def __process(self,obj):
         #process all the messages
         #add to list except, loop back message
+        if obj is None:
+            gen_queue.trace_msg('object is none')
         if obj.item.fn is not None:
             try:
                 self.execute_list.append(obj.item.fn.handle(obj.item.item))
-            except:
-                pass
+            except Exception as ex:
+                gen_queue.trace_msg('Error Messsage_loop __Process()')
+                gen_queue.trace_msg(ex)
             finally:
                 pass
 
@@ -306,5 +334,6 @@ class message_loop(gen_queue):
                     pass
         # add loop back message, if there is pending messages to process
         if len(self.execute_list) > 0:
-            self.enqueue(None, message_obj(None,None), False)
+            gen_queue.trace_msg('loop enqueue')
+            self.enqueue(1, message_obj(None,None), False)
 
