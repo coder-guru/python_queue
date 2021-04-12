@@ -1,8 +1,9 @@
 """  
 TODO: Support Kill
 TODO: Support sending message to main publish queue
+TODO: cleanup status dictionary of expired items
 """
-import traceback, sys
+import traceback, sys, os
 import multiprocessing
 from multiprocessing import Manager
 import Queue
@@ -13,195 +14,173 @@ import uuid
 
 _manager = Manager()
 
-class message_status(object):
-    def __init__(self, success, error_msg):
-        self.success = success
-        self.error_msg = error_msg
+class STATUS:
+    @classmethod
+    def WAIT(cls): return 0
+    @classmethod
+    def START(cls): return 1
+    @classmethod
+    def SUCCESS(cls): return 2
+    @classmethod
+    def FAIL(cls): return 3
+    @classmethod
+    def KILL(cls): return 4
 
+TRACE_LEVEL = 0
+
+class global_args(object):
+    def __init__(self):
+        self.work_status = _manager.dict()
+        self.error_msg = _manager.dict()
+        self.all_q = _manager.list()
+class handler_args(object):
+    def __init__(self,target_q,global_args,pre_work,do_work,post_work,all_done,forwarder):
+        self.target_q = target_q
+        self.global_args = global_args
+        self.pre_work = pre_work
+        self.do_work = do_work
+        self.post_work = post_work
+        self.all_done = all_done
+        self.is_forwarder = forwarder
+
+        #signal to quit processing
+        self.all_done_signal = _manager.Value('b', 0)
+
+class Worker(multiprocessing.Process):
+    def __init__(self, worker_id, handler, args):
+        gen_queue.trace_msg("Init Worker...")
+        self.__now_processing = None
+        super(Worker, self).__init__(target=handler,name=worker_id,args=(args,))
+        gen_queue.trace_msg("Init Worker...Done.")
+
+    def now_processing(self):
+        return self.__now_processing
+
+    def set_now_processing(self,message_id):
+        self.__now_processing = message_id
+
+class MessageKilled(Exception):
+    pass
 class queue_item(object):
-    def __init__(self, key, item, await_support):
-        if key is None:
-            key = hash(item)
-        self.key = key
+    def __init__(self, item):
         self.item = item
-        self.done = None
-        self.id = uuid.uuid4()
-        if await_support:
-            self.done = _manager.Semaphore(1)
-
+        self.id = uuid.uuid4()        
 class gen_queue(object):
     #keep all instance of queue (for broadcast type of processing)
     _all_queue = []
 
-    def __init__(self,num_workers):
-        self.q = multiprocessing.Queue()
-        self.all_done = multiprocessing.Value('b', 0)
-        self.workers = {}
-        self.work_status = _manager.dict()
-
+    def __init__(self,g_args, num_workers):
+        self.g_args = g_args
+        q = multiprocessing.Queue()
+        self.args = handler_args(
+                    q,
+                    g_args,
+                    self.pre_work_handler(),
+                    self.do_work_handler(),
+                    self.post_work_handler(),
+                    gen_queue.all_done,
+                    False
+                    )
         if num_workers <= 0:
             num_workers = 1
         self.num_workers = num_workers
+        self.workers = {}
         self.trace_q = None
-        #create a lock for protected access to workers list
-        self.lock = multiprocessing.Lock()
 
-    # indicate whether this queue is forwarder(no real processing of data)
-    def is_forwarder(self):
-        return False
+    def pre_work_handler(self):
+        return gen_queue._pre_work
 
-    def get_processor(self):
-        return self.__process
-        
-    def start(self):
-        for i in range(0,self.num_workers):      
-            self.add_worker()
-        #add to global list
-        gen_queue._all_queue.append(self)
-
-    def add_worker(self):
-        worker_id = uuid.uuid4()
-        p = multiprocessing.Process(target=gen_queue.__consume, args=(worker_id, self.q,self.all_done \
-                                ,self.get_processor(),self.is_forwarder(),self._start_process, self._end_process))
-        self.workers[worker_id] = {'worker':p,}
-        self.work_status[worker_id] = _manager.dict()
-        p.start()
-
-    def remove_worker(self, worker_id):
+    @classmethod
+    def _pre_work(cls,worker,args,item):
+        gen_queue.trace_msg("Pre work...")
         try:
-            worker = self.workers[worker_id]
-            self.workers.pop(worker_id)
-            self.work_status.pop(worker_id)
-            worker['worker'].terminate()
-            self.add_worker()
-        except Exception as ex:
-            gen_queue.trace_msg('remove_worker() failed.')
-            gen_queue.trace_msg(ex)
+            if not args.is_forwarder:
+                #if kill request is already made, do not process
+                if args.global_args.work_status[item.id] is not STATUS.KILL():
+                    worker.set_now_processing(item.id)
+                    args.global_args.work_status[item.id] = STATUS.START()
+                else:
+                    #raise exception
+                    raise MessageKilled('Message killed!')
+                    
+        except KeyError as ex:
+            pass
         finally:
             pass
 
-    def set_trace(self, trace_q):
-        self.trace_q = trace_q
-
-    def enqueue(self, key, obj, await=False):
-        #create queue item and then enque
-        #check for nested queue items
-        queue_chaining = isinstance(obj, queue_item)
-        if queue_chaining:
-            item = obj
-        else:
-            item = queue_item(key, obj, await)
-        # check if tracing is set
-        if self.trace_q is not None:
-            self.trace_q.enqueue(None,item, False)
-
-        if item.done is not None and not queue_chaining:
-            item.done.acquire()
-        self.q.put(item, False)
-        if item.done is not None and not queue_chaining:
-            item.done.acquire()
-        #return status
-        #return item.status.value
-
-    def stop(self):
-        gen_queue._all_queue.remove(self)
-        self.all_done.value = 1
-        for key, worker in self.workers.items():      
-            worker['worker'].join()
-
-    def _start_process(self, worker_id, key):
-        try:
-            self.lock.acquire()
-            self.work_status[worker_id].clear()
-            if key is not None:
-                self.work_status[worker_id][key] = 0
-        except Exception as ex:
-            gen_queue.trace_msg('_start_process() ', ex)
-        finally:
-            self.lock.release()
-
-    def _end_process(self, worker_id, key, status=0):
-        try:
-            self.lock.acquire()
-            self.work_status[worker_id][key] = status
-        except Exception as ex:
-            gen_queue.trace_msg('_end_process() ', ex)
-        finally:
-            self.lock.release()
-
-    def kill(self, key):
-        gen_queue.trace_msg('Kill recieved key {0}'.format(key))
-        killed = False
-        self.lock.acquire()
-        try:
-            #find the worker that is processing
-            for worker_id, status in self.work_status.items():
-                if status is not None:
-                    if status.get(key, None) is not None: 
-                        self.remove_worker(worker_id)
-                        gen_queue.trace_msg('Kill was successful!')
-                        killed = True
-                        break
-        except Exception as ex:
-            gen_queue.trace_msg('Kill process error!', ex)
-        finally:
-            self.lock.release()
-        if killed:
-            self.add_worker()
-        return killed
+    def do_work_handler(self):
+        raise NotImplementedError('Derived class to implement this method.')
 
     @classmethod
-    def trace_msg(cls,msg, level=0):
-        if level > 0:
-            print(msg)
-        pass
+    def _do_work(cls,worker,item):
+        gen_queue.trace_msg("Do work...")
+        raise NotImplementedError('_do_work Not Implemented.')
 
     @classmethod
-    def all_queue_kill(cls,key):
-        for q in gen_queue._all_queue:
-            try:
-                q.kill(key)
-                pass
-            except Exception as ex:
-                gen_queue.trace_msg(ex)
-            finally:
-                pass
-        pass
+    def all_done(cls,worker,args):
+        return args.all_done_signal.value == 1
 
-    def __process(self, obj):
-        gen_queue.trace_msg("Consume {0}".format(obj))
-        
+    def post_work_handler(self):
+        return gen_queue._post_work
+
     @classmethod
-    def __consume(cls,worker_id,q, all_done, f_process,forwarder=False,f_start=None,f_end=None):
-        f_start = None
-        f_end = None
+    def _post_work(cls,worker,args,item,status, error_msg):
+        gen_queue.trace_msg("Post work...")
+        try:
+            #if not a forwarder, then set status
+            if not args.is_forwarder:
+                if args.global_args.work_status[item.id] is not STATUS.KILL():
+                    args.global_args.work_status[item.id] = status
+                    args.global_args.error_msg[item.id] = error_msg
+                worker.set_now_processing(None)
+
+        except KeyError as ex:
+            pass
+        finally:
+            pass
+
+    @classmethod
+    def handle_work(cls,args):
+        worker = multiprocessing.current_process()
+        gen_queue.trace_msg('Process Name - {0}'.format(worker.name))
+        status = None
+        err_msg = None
         while True:
             try:
                 gen_queue.trace_msg('about to get queue')
-                obj = q.get(True,5)
+                status = STATUS.START()
+                obj = None
+                obj = args.target_q.get(True,5)
                 gen_queue.trace_msg('done get queue')
                 try:
-                    if f_start is not None:
-                        f_start(worker_id,obj.key)
+                    if args.pre_work is not None:
+                        args.pre_work(worker,args,obj)
                     gen_queue.trace_msg('about to process')
-                    f_process(obj)
+                    if args.do_work is not None:
+                        args.do_work(worker,obj)
                     gen_queue.trace_msg('done process')
-                    if f_end is not None:
-                        f_end(worker_id, obj.key, 0)
+                    status = STATUS.SUCCESS()
+                except MessageKilled as ex1:
+                    status = STATUS.KILL()
+                    err_msg = str(ex1)
+                    gen_queue.trace_msg(err_msg, 4)
+                    pass
                 except Exception as ex:
                     gen_queue.trace_msg('Inner Error Processing...', 4)
                     gen_queue.trace_msg(ex,4)
+                    #traceback.print_stack()
                     #set error attributes
-                    if f_end is not None:
-                        f_end(worker_id, obj.key, 1)
+                    status = STATUS.FAIL()
+                    err_msg = str(ex)
+
                 finally:
-                    if obj.done is not None and not forwarder:
-                        obj.done.release()
+                    if args.post_work is not None:
+                        args.post_work(worker,args,obj, status,err_msg)
                     pass
 
             except Queue.Empty:
                 gen_queue.trace_msg('Queue Empty...')
-                if all_done.value == 1:
+                if args.all_done(worker, args):
                     gen_queue.trace_msg('Breaking out...')
                     break 
             except Exception as ex:
@@ -212,13 +191,151 @@ class gen_queue(object):
             finally:
                 pass
 
-class my_queue(gen_queue):
-    def get_processor(self):
-        return self.__process
+        gen_queue.trace_msg('All Done!', 1)
 
-    def __process(self, obj):
+    def start(self):
+        for i in range(0,self.num_workers):      
+            self.add_worker()
+        #self.g_args.all_q.append(self)
+
+    def add_worker(self):
+        worker_id = uuid.uuid4()
+        w = Worker(worker_id,gen_queue.handle_work,self.args)
+        self.workers[worker_id] = w
+        w.start()
+
+    def remove_worker(self, worker_id):
+        try:
+            worker = self.workers[worker_id]
+            self.workers.pop(worker_id)
+            worker.terminate()
+        except Exception as ex:
+            gen_queue.trace_msg('remove_worker() failed.',4)
+            gen_queue.trace_msg(ex, 4)
+        finally:
+            pass
+
+    def set_trace(self, trace_q):
+        self.trace_q = trace_q
+
+    @classmethod
+    def who_am_i(cls, title='who_am_i()'):
+        # print(title)
+        # print('module name:', __name__)
+        # print('parent process:', os.getppid())
+        # print('process id:', os.getpid())
+        pass
+
+    def _enqueue(self, obj):
+        gen_queue.who_am_i('Enqueue()')
+        #create queue item and then enque
+        #check for nested queue items
+        queue_chaining = isinstance(obj, queue_item)
+        if queue_chaining:
+            item = obj
+        else:
+            item = queue_item(obj)
+        # check if tracing is set
+        if self.trace_q is not None:
+            self.trace_q.enqueue_async(item)
+
+        self.g_args.work_status[item.id] = STATUS.WAIT()
+        self.args.target_q.put(item, False)
+        return item.id
+
+    def enqueue_async(self, obj):
+        return self._enqueue(obj)
+
+    def enqueue_await(self, async_id):
+        status = None
+        error_msg = None
+        while True:
+            try:
+                status = self.g_args.work_status[async_id]
+                if status == STATUS.START() or status == STATUS.WAIT():
+                    time.sleep(5)
+                else:
+                    error_msg = self.g_args.error_msg[async_id]
+                    break
+            except KeyError:
+                break
+            except Exception as ex:
+                gen_queue.trace_msg('enqueue_await() Exception.', 4)
+                gen_queue.trace_msg(ex,4)
+            finally:
+                pass
+
+        #remove async_id from list
+        try:
+            self.g_args.work_status.remove(async_id)
+            self.g_args.error_msg.remove(async_id)
+        except:
+            pass
+        finally:
+            pass
+        return (status, error_msg)
+
+    def stop(self):
+        #gen_queue._all_queue.remove(self)
+        self.args.all_done_signal.value = 1
+        for key, worker in self.workers.items():
+            worker.join()
+
+    def kill(self, async_id):
+        gen_queue.trace_msg('Kill recieved id {0}'.format(async_id))
+        killed = False
+        try:
+            #find the status of the request
+            status = self.g_args.work_status[async_id]
+            if status == STATUS.START():
+                #find the worker that is processing the message
+                for worker_id, w in self.workers.items():
+                    if w.now_processing() == async_id:
+                        self.remove_worker(worker_id)
+                        gen_queue.trace_msg('Kill was successful!')
+                        killed = True
+                        break
+            elif status == STATUS.WAIT():
+                #set the status to kill
+                self.g_args.work_status[async_id] = STATUS.KILL()
+                gen_queue.trace_msg('Kill request made!')
+                killed = True
+        except KeyError:
+            pass
+        except Exception as ex:
+            gen_queue.trace_msg('Kill process error!', 4)
+            gen_queue.trace_msg(ex, 4)
+        finally:
+            pass
+        if killed:
+            self.add_worker()
+        return killed
+
+    @classmethod
+    def trace_msg(cls,msg, level=0):
+        if level >= TRACE_LEVEL:
+            print(msg)
+        pass
+
+    @classmethod
+    def all_queue_kill(cls,key):
+        for q in gen_queue._all_queue:
+            try:
+                q.kill(key)
+                pass
+            except Exception as ex:
+                gen_queue.trace_msg(ex, 4)
+            finally:
+                pass
+        pass
+class my_queue(gen_queue):
+    def do_work_handler(self):
+        return my_queue._do_work
+
+    @classmethod
+    def _do_work(cls,worker,item):
         time.sleep(random.randint(1,5))
-        gen_queue.trace_msg("my_queue {0}".format(obj.item))
+        gen_queue.trace_msg("my_queue {0}".format(item.item))
 
 class topic_config(object):
     def __init__(self, topic, handler_cls, num_workers):
@@ -227,12 +344,14 @@ class topic_config(object):
         self.num_workers = num_workers
 
 class gen_topic_queue(gen_queue):
-    def __init__(self, topic_config_arr, num_workers=1):
-        super(gen_topic_queue, self).__init__(num_workers)
+    def __init__(self, g_args, topic_config_arr, num_workers=1):
+        super(gen_topic_queue, self).__init__(g_args,num_workers)
+        #set forwarder
+        self.args.is_forwarder = True
         self.__topic_q = []
         for topic_config in topic_config_arr:
             #create queues to handle each topic
-            q = topic_config.handler_cls(topic_config.num_workers)
+            q = topic_config.handler_cls(g_args, topic_config.num_workers)
             self.__topic_q.append({topic_config.topic : q})
 
     def start(self):
@@ -245,52 +364,50 @@ class gen_topic_queue(gen_queue):
             self.__topic_q[i].values()[0].stop()
         super(gen_topic_queue, self).stop()
 
-    def is_forwarder(self):
-        return True
+    def do_work_handler(self):
+        return self._do_work
 
-    def get_processor(self):
-        return self.__process
-
-    def __process(self,obj):
+    def _do_work(self,worker,item):
         #match topic and send to associated queue
         orphen_message = True
         for i in range(0,len(self.__topic_q)):
             p = re.compile(self.__topic_q[i].keys()[0].replace(".","[.]"))
-            if p.match(obj.item['topic']) is not None:
+            if p.match(item.item['topic']) is not None:
                 #queue item to repective queue. honor await request
-                self.__topic_q[i].values()[0].enqueue(obj.key, obj, False)
+                self.__topic_q[i].values()[0].enqueue_async(item)
                 orphen_message = False
                 break
         if orphen_message:
             gen_queue.trace_msg("Unhandled topic: {0}".format(obj.item['topic']))
-
 class timer_queue(gen_queue):
-    def __init__(self, num_seconds, msg, q):
+    def __init__(self, g_args,num_seconds, msg, q):
         self.num_seconds = num_seconds
         self.msg = msg
         self.target_q = q
-        super(timer_queue, self).__init__(1)
+        super(timer_queue, self).__init__(g_args,1)
 
     def start(self):
         super(timer_queue, self).start()
-        self.enqueue(None, 1, False)
+        self.enqueue_async(1)
 
-    def get_processor(self):
-        return self.__process
+    def do_work_handler(self):
+        return self._do_work
 
-    def __process(self,obj):
+    def _do_work(self,worker,item):
         gen_queue.trace_msg('Timer msg delivery...')
-        self.target_q.enqueue(1, self.msg, False)
+        self.target_q.enqueue_async(self.msg)
         time.sleep(self.num_seconds)
-        if not self.all_done.value == 1:
-            self.enqueue(1,1, False)
+        #check if we are done.
+        if not self.args.all_done_signal.value == 1:        
+            self.enqueue_async(1)
 
 class trace_queue(gen_queue):
-    def get_processor(self):
-        return self.__process
+    def do_work_handler(self):
+        return trace_queue._do_work
 
-    def __process(self,obj):
-        gen_queue.trace_msg('{2} id:{0} msg:{1}'.format(obj.id,obj.item,datetime.datetime.now()))
+    @classmethod
+    def _do_work(cls,worker,item):
+        gen_queue.trace_msg('{2} id:{0} msg:{1}'.format(item.id,item.item,datetime.datetime.now()))
 
 class message_obj(object):
     def __init__(self, item, fn):
@@ -300,40 +417,61 @@ class message_obj(object):
 #message handler base class
 class message_handler(object):
     def handle(self, msg):
-        raise NotImplementedError       
+        raise NotImplementedError
+
 class message_loop(gen_queue):
-    def __init__(self):
+    def __init__(self, g_args):
         self.execute_list = []
-        super(message_loop, self).__init__(1)
+        super(message_loop, self).__init__(g_args,1)
 
-    def get_processor(self):
-        return self.__process
+    def do_work_handler(self):
+        return message_loop._get_processor(self)
 
-    def __process(self,obj):
-        #process all the messages
-        #add to list except, loop back message
-        if obj is None:
-            gen_queue.trace_msg('object is none')
-        if obj.item.fn is not None:
-            try:
-                self.execute_list.append(obj.item.fn.handle(obj.item.item))
-            except Exception as ex:
-                gen_queue.trace_msg('Error Messsage_loop __Process()')
-                gen_queue.trace_msg(ex)
-            finally:
-                pass
+    @classmethod
+    def _get_processor(cls, queue_obj):
+        #closure
+        execute_list = []
 
-        # process all
-        for generator in self.execute_list:
-            if obj is not None:
+        def _msg_process(worker, obj):
+            #process all the messages
+            #add to list except, loop back message
+            if obj is None:
+                gen_queue.trace_msg('object is none')
+            if obj.item.fn is not None:
                 try:
-                    next(generator)
-                except StopIteration:
-                    self.execute_list.remove(generator)
+                    execute_list.append(obj.item.fn(obj.item.item))
+                    pass
+                except Exception as ex:
+                    gen_queue.trace_msg('Error Messsage_loop __Process()', 4)
+                    gen_queue.trace_msg(ex, 4)
                 finally:
                     pass
-        # add loop back message, if there is pending messages to process
-        if len(self.execute_list) > 0:
-            gen_queue.trace_msg('loop enqueue')
-            self.enqueue(1, message_obj(None,None), False)
 
+            # process all
+            for generator in execute_list:
+                if obj is not None:
+                    try:
+                        next(generator)
+                    except StopIteration:
+                        execute_list.remove(generator)
+                    finally:
+                        pass
+            # add loop back message, if there is pending messages to process
+            if len(execute_list) > 0:
+                gen_queue.trace_msg('loop enqueue')
+                queue_obj.enqueue_async(message_obj(None,None))
+
+        return _msg_process
+
+if __name__ == '__main__':
+    print('Main called...')
+    g_args = global_args()
+    try:
+        q = gen_queue(g_args,1)
+        q.start()
+        q.enqueue_async(1)
+        q.stop()
+    except Exception as ex:
+        print(ex)
+    finally:
+        pass
