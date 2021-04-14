@@ -208,6 +208,24 @@ class TestStringMethods(unittest.TestCase):
             print(ex)
             self.fail(traceback.print_stack())
 
+    def test_kill_all_cases(self):
+        g_args = global_args()    
+        try:
+            s = my_queue(g_args,1)
+            s.start()
+            #kill in not existing
+            self.failIf(s.kill('asdfgf;lkjhj') == True)
+            w1 = s.enqueue_async(1)
+            w2 = s.enqueue_async(1)
+            time.sleep(2)
+            self.failIf(s.kill(w1) == False)
+            self.failIf(s.kill(w2) == False)
+            s.stop()
+
+        except Exception as ex:
+            print(ex)
+            self.fail(traceback.print_stack())        
+
     def test_error_msg(self):
         g_args = global_args()    
         try:

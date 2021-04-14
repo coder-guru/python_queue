@@ -11,6 +11,7 @@ import time, datetime
 import re
 import random
 import uuid
+from ctypes import c_char_p
 
 _manager = Manager()
 
@@ -49,22 +50,25 @@ class handler_args(object):
 class Worker(multiprocessing.Process):
     def __init__(self, worker_id, handler, args):
         gen_queue.trace_msg("Init Worker...")
-        self.__now_processing = None
+        self.__now_processing = _manager.Value(c_char_p, None)
         super(Worker, self).__init__(target=handler,name=worker_id,args=(args,))
         gen_queue.trace_msg("Init Worker...Done.")
 
     def now_processing(self):
-        return self.__now_processing
+        return self.__now_processing.value
 
     def set_now_processing(self,message_id):
-        self.__now_processing = message_id
+        self.__now_processing.value = message_id
 
 class MessageKilled(Exception):
     pass
 class queue_item(object):
-    def __init__(self, item):
+    def __init__(self, item,id=None):
         self.item = item
-        self.id = uuid.uuid4()        
+        if id is None:
+            self.id = uuid.uuid4()
+        else:
+            self.id = id      
 class gen_queue(object):
     #keep all instance of queue (for broadcast type of processing)
     _all_queue = []
@@ -96,12 +100,14 @@ class gen_queue(object):
         try:
             if not args.is_forwarder:
                 #if kill request is already made, do not process
+                gen_queue.trace_msg("status -> {0}".format(args.global_args.work_status[item.id]))
                 if args.global_args.work_status[item.id] is not STATUS.KILL():
+                    gen_queue.trace_msg("Set Now processing - ")
                     worker.set_now_processing(item.id)
                     args.global_args.work_status[item.id] = STATUS.START()
                 else:
                     #raise exception
-                    raise MessageKilled('Message killed!')
+                    raise MessageKilled('Message killed while waiting!')
                     
         except KeyError as ex:
             pass
@@ -287,10 +293,13 @@ class gen_queue(object):
         try:
             #find the status of the request
             status = self.g_args.work_status[async_id]
+            print('status -', status)
             if status == STATUS.START():
                 #find the worker that is processing the message
                 for worker_id, w in self.workers.items():
+                    print('w - ',w.now_processing())
                     if w.now_processing() == async_id:
+                        gen_queue.trace_msg('Killing worker!')
                         self.remove_worker(worker_id)
                         gen_queue.trace_msg('Kill was successful!')
                         killed = True
@@ -334,7 +343,7 @@ class my_queue(gen_queue):
 
     @classmethod
     def _do_work(cls,worker,item):
-        time.sleep(random.randint(1,5))
+        time.sleep(5)
         gen_queue.trace_msg("my_queue {0}".format(item.item))
 
 class topic_config(object):
@@ -434,7 +443,7 @@ class message_loop(gen_queue):
 
         def _msg_process(worker, obj):
             #process all the messages
-            #add to list except, loop back message
+            #add to list except, loop back message            
             if obj is None:
                 gen_queue.trace_msg('object is none')
             if obj.item.fn is not None:
