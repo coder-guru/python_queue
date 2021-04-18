@@ -1,5 +1,4 @@
 """  
-TODO: Support Kill
 TODO: Support sending message to main publish queue
 TODO: cleanup status dictionary of expired items
 """

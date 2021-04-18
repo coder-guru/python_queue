@@ -89,8 +89,8 @@ class TestStringMethods(unittest.TestCase):
             s.start()
             for i in range(0,5):
                 wait = s.enqueue_async(i)
-                result = s.enqueue_await(wait)
-                self.failIf(result.status is not STATUS.SUCCESS())
+                status,_ = s.enqueue_await(wait)
+                self.failIf(status is not STATUS.SUCCESS())
             s.stop()
         except Exception as ex:
             print(ex)
@@ -121,8 +121,8 @@ class TestStringMethods(unittest.TestCase):
             for i in range(0,10):
                 if i % 2 == 0:
                     wait = s.enqueue_async({'topic':'.q1.number','msg':i,})
-                    result = s.enqueue_await(wait)
-                    self.failIf(result.status is not STATUS().SUCCESS)
+                    status,_ = s.enqueue_await(wait)
+                    self.failIf(status is not STATUS.SUCCESS())
                 else:
                     s.enqueue_async({'topic':'.q2.number','msg':i,})
             s.stop()
@@ -259,30 +259,6 @@ class TestStringMethods(unittest.TestCase):
         except Exception as ex:
             print(ex)
             self.fail(traceback.print_stack())
-
-    def test_server(self):
-        server_address = ('', 8000)
-        httpd = MyTCPServer(server_address, MyHandler)
-        MyHandler.im_serving = httpd
-        print(MyHandler.kill_msg)
-        try:
-            try:
-                g_args = global_args()    
-                q_config = []
-                q_config.append(topic_config('.q1.*', q1_topic_handler, 1))
-                tq = gen_topic_queue(g_args,q_config, 1)
-                tq.start()
-                t = timer_queue(g_args,5,{'topic':'.q1.timer','msg':1,},tq)
-                t.start()
-                httpd.serve_forever()
-            except Exception as ex:
-                print(ex)
-            finally:
-                t.stop()
-                tq.stop()
-        except KeyboardInterrupt:
-            pass
-        httpd.server_close()
 
     def test_server2(self):
         app = DaemonApp("localhost",8000)
