@@ -13,7 +13,17 @@ import random
 import uuid
 from ctypes import c_char_p
 
+import SimpleHTTPServer
+import SocketServer
+import thread
+import socket
+import sys
+
+_app = None
+
 _manager = Manager()
+#keep all instance of queue (for broadcast type of processing)
+_all_q = _manager.dict()
 
 class STATUS:
     @classmethod
@@ -33,7 +43,7 @@ class global_args(object):
     def __init__(self):
         self.work_status = _manager.dict()
         self.error_msg = _manager.dict()
-        self.all_q = _manager.list()
+        
 class handler_args(object):
     def __init__(self,target_q,global_args,pre_work,do_work,post_work,all_done,forwarder):
         self.target_q = target_q
@@ -70,14 +80,11 @@ class queue_item(object):
         else:
             self.id = id      
 class gen_queue(object):
-    #keep all instance of queue (for broadcast type of processing)
-    _all_queue = []
-
     def __init__(self,g_args, num_workers):
         self.g_args = g_args
-        q = multiprocessing.Queue()
+        self.q = multiprocessing.Queue()
         self.args = handler_args(
-                    q,
+                    self.q,
                     g_args,
                     self.pre_work_handler(),
                     self.do_work_handler(),
@@ -90,6 +97,7 @@ class gen_queue(object):
         self.num_workers = num_workers
         self.workers = {}
         self.trace_q = None
+        self.id = uuid.uuid4()
 
     def pre_work_handler(self):
         return gen_queue._pre_work
@@ -202,7 +210,7 @@ class gen_queue(object):
     def start(self):
         for i in range(0,self.num_workers):      
             self.add_worker()
-        #self.g_args.all_q.append(self)
+        #_all_q[self.id] = self.q
 
     def add_worker(self):
         worker_id = uuid.uuid4()
@@ -471,6 +479,81 @@ class message_loop(gen_queue):
                 queue_obj.enqueue_async(message_obj(None,None))
 
         return _msg_process
+
+class kill_topic_handler(gen_queue):
+    def do_work_handler(self):
+        return kill_topic_handler._do_work
+
+    @classmethod
+    def _do_work(cls,worker,item):
+        v = item.item['msg']
+        post_data = 'POST /{0} HTTP/1.0 \n\
+From: localhost\n\
+User-Agent: internal\n\
+Content-Type: application/x-www-form-urlencoded\n\
+Content-Length: 8\n\
+\n\
+msg=kill\n\
+'
+    
+        #for testing error message
+        if v == 'Kill!':
+            print("Kill received - {0}".format(v))
+            kill_topic_handler._kill_app(_app, post_data.format(_app.get_id()))
+        print("kill_topic_handler - {0}".format(v))
+
+    @classmethod
+    def _kill_app(cls,app,data):
+
+        server_address = app.get_server_address()
+
+        # Create a socket (SOCK_STREAM means a TCP socket)
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Connect to server and send data
+            sock.connect(server_address)
+            sock.sendall(bytes(data + "\n"))
+            received = str(sock.recv(1024))
+        finally:
+            #wait for the pipe to be clear
+            time.sleep(5)
+            sock.close()
+
+class HttpHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+    def do_POST(self):
+        if self.path.startswith('/' + str(_app.get_id())):
+            print "Server is going down, run it again manually!"
+            def kill_me_please(server):
+                server.shutdown()
+            thread.start_new_thread(kill_me_please, (_app.get_server(),))
+            self.send_error(500)
+
+class MyTCPServer(SocketServer.TCPServer):
+    def server_bind(self):
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind(self.server_address)
+    
+class DaemonApp(object):
+    def __init__(self, host='localhost', port=8000):
+        self._server_address = (host, port)
+        self._httpd = MyTCPServer(self._server_address, HttpHandler)
+        self._id = str(uuid.uuid4())
+        
+    def get_server(self): return self._httpd
+
+    def get_id(self): return self._id
+    def get_server_address(self): return self._server_address
+
+    def start_app(self):
+        print('Starting Daemon.... id:{0}'.format(self.get_id()))
+        self.get_server().serve_forever()
+        pass
+
+    def stop_app(self):
+        pass
+
+    pass
 
 if __name__ == '__main__':
     print('Main called...')

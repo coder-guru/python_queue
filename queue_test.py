@@ -1,13 +1,19 @@
 import unittest
 import traceback
-import time, random
+import time, random,uuid
 import os
 import multiprocessing as mp
+from multiprocessing.managers import BaseManager
+
+import time
+import thread
+import sys
 
 from python_queue import my_queue, gen_topic_queue, topic_config, gen_queue, timer_queue
 from python_queue import trace_queue, message_loop, message_obj, message_handler
 from python_queue import global_args
-from python_queue import STATUS
+from python_queue import STATUS, DaemonApp,kill_topic_handler
+import python_queue
 
 class q1_topic_handler(gen_queue):
     def do_work_handler(self):
@@ -253,6 +259,57 @@ class TestStringMethods(unittest.TestCase):
         except Exception as ex:
             print(ex)
             self.fail(traceback.print_stack())
+
+    def test_server(self):
+        server_address = ('', 8000)
+        httpd = MyTCPServer(server_address, MyHandler)
+        MyHandler.im_serving = httpd
+        print(MyHandler.kill_msg)
+        try:
+            try:
+                g_args = global_args()    
+                q_config = []
+                q_config.append(topic_config('.q1.*', q1_topic_handler, 1))
+                tq = gen_topic_queue(g_args,q_config, 1)
+                tq.start()
+                t = timer_queue(g_args,5,{'topic':'.q1.timer','msg':1,},tq)
+                t.start()
+                httpd.serve_forever()
+            except Exception as ex:
+                print(ex)
+            finally:
+                t.stop()
+                tq.stop()
+        except KeyboardInterrupt:
+            pass
+        httpd.server_close()
+
+    def test_server2(self):
+        app = DaemonApp("localhost",8000)
+        python_queue._app = app
+        try:
+            try:
+                g_args = global_args()    
+                q_config = []
+                q_config.append(topic_config('.q1.normal.*', q1_topic_handler, 1))
+                q_config.append(topic_config('.q1.kill', kill_topic_handler, 1))
+                tq = gen_topic_queue(g_args,q_config, 1)
+                tq.start()
+                tq.enqueue_async({'topic':'.q1.normal','msg':'Msg1.',})
+                tq.enqueue_async({'topic':'.q1.normal','msg':'Msg2.',})
+                tq.enqueue_async({'topic':'.q1.normal','msg':'Msg3.',})
+                tq.enqueue_async({'topic':'.q1.kill','msg':'Kill!',})
+                app.start_app()
+            except Exception as ex:
+                print(ex)
+            finally:
+                tq.stop()
+        except KeyboardInterrupt:
+            pass
+        try:
+            app.stop_app()
+        finally:
+            pass
 
 if __name__ == '__main__':
     unittest.main()
