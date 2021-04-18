@@ -10,7 +10,7 @@ import thread
 import sys
 
 from python_queue import my_queue, gen_topic_queue, topic_config, gen_queue, timer_queue
-from python_queue import trace_queue, message_loop, message_obj, message_handler
+from python_queue import trace_queue, message_loop, message_obj, message_handler,gc_queue
 from python_queue import global_args
 from python_queue import STATUS, DaemonApp,kill_topic_handler
 import python_queue
@@ -286,6 +286,28 @@ class TestStringMethods(unittest.TestCase):
             app.stop_app()
         finally:
             pass
+
+    def test_gc_collect(self):
+        g_args = global_args()    
+        try:
+            s = my_queue(g_args,1)
+            g = gc_queue(g_args)
+            t = timer_queue(g_args,5,{'topic':'.q4.gc','msg':1,},g)
+            g.start()
+            s.start()
+            t.start()
+            w = s.enqueue_async(2)
+            s.enqueue_async(3)
+            time.sleep(10)
+            s.enqueue_async(5)
+            time.sleep(30)
+            t.stop()
+            s.stop()
+            g.stop()
+        except Exception as ex:
+            print(ex)
+            self.fail(traceback.print_stack())
+
 
 if __name__ == '__main__':
     unittest.main()

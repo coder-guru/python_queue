@@ -42,6 +42,7 @@ class global_args(object):
     def __init__(self):
         self.work_status = _manager.dict()
         self.error_msg = _manager.dict()
+        self.status_gc = _manager.dict()
         
 class handler_args(object):
     def __init__(self,target_q,global_args,pre_work,do_work,post_work,all_done,forwarder):
@@ -253,6 +254,7 @@ class gen_queue(object):
             self.trace_q.enqueue_async(item)
 
         self.g_args.work_status[item.id] = STATUS.WAIT()
+        self.g_args.status_gc[time.time()] = item.id
         self.args.target_q.put(item, False)
         return item.id
 
@@ -280,8 +282,8 @@ class gen_queue(object):
 
         #remove async_id from list
         try:
-            self.g_args.work_status.remove(async_id)
-            self.g_args.error_msg.remove(async_id)
+            self.g_args.work_status.pop(async_id)
+            self.g_args.error_msg.pop(async_id)
         except:
             pass
         finally:
@@ -424,6 +426,45 @@ class trace_queue(gen_queue):
     @classmethod
     def _do_work(cls,worker,item):
         gen_queue.trace_msg('{2} id:{0} msg:{1}'.format(item.id,item.item,datetime.datetime.now()))
+
+class gc_queue(gen_queue):
+    def __init__(self, g_args):
+        super(gc_queue, self).__init__(g_args,1)
+
+    def do_work_handler(self):
+        return gc_queue._do_work
+
+    def post_work_handler(self):
+        return gc_queue._post_work
+
+    @classmethod
+    def _do_work(cls,worker,item):
+        pass
+    @classmethod
+    def _post_work(cls,worker,args,item,status, error_msg):
+        gen_queue.trace_msg('Garbage collecting...')
+        # remove expired status items
+        try:
+            gc_marker = time.time() - 5
+            for gc_key in [t if t < gc_marker else 0 for t in args.global_args.status_gc.keys() ]:
+                if gc_key is 0:
+                    continue
+                async_id = args.global_args.status_gc[gc_key]
+                if async_id in args.global_args.work_status:
+                    gen_queue.trace_msg('Key {0} collected.'.format(async_id))
+                    args.global_args.work_status.pop(async_id)
+                    if async_id in args.global_args.error_msg:
+                        args.global_args.error_msg.pop(async_id)
+                
+                args.global_args.status_gc.pop(gc_key)
+        except Exception as ex:
+            print(ex)
+            traceback.print_stack()
+        finally:
+            #call parent
+            gen_queue._post_work(worker,args,item,status, error_msg)
+            pass
+
 
 class message_obj(object):
     def __init__(self, item, fn):
