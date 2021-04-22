@@ -544,15 +544,6 @@ class kill_topic_handler(gen_queue):
     @classmethod
     def _do_work(cls,worker,args,item):
         v = item.item['msg']
-        post_data = 'POST /{0} HTTP/1.0 \n\
-From: localhost\n\
-User-Agent: internal\n\
-Content-Type: application/x-www-form-urlencoded\n\
-Content-Length: 8\n\
-\n\
-msg=kill\n\
-'    
-        #for testing error message
         if v == 'Kill!':
             print("Kill received - {0}".format(v))
             args.global_args.custom_args['kill_client_con'].send(args.global_args.custom_args['app_id'])
@@ -560,16 +551,26 @@ msg=kill\n\
 
 class HttpHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
-        if self.path.startswith('/' + str(_app.get_id())):
+        if self.path.startswith('/' + str(self.server.get_id())):
             # TODO: check data and support other actions like sending message to a queue
             # content_length = int(self.headers['Content-Length']) # <--- Gets the size of data
             # post_data = self.rfile.read(content_length) # <--- Gets the data itself
-            def kill_me_please(server):
-                server.shutdown()
-            thread.start_new_thread(kill_me_please, (None,))
-            self.send_error(500)
+            print('Requesting Shutdown...')
+            self.send_response(200, 'Shutdown request has been sent!')
+            self.end_headers()
+            print('Requesting Shutdown..Done.')
 
 class MyTCPServer(socketserver.TCPServer):
+    def __init__(self,server_address,RequestHandlerClass,bind_and_activate=True,app=None):
+        socketserver.TCPServer.__init__(self,server_address,RequestHandlerClass,bind_and_activate)
+        self.app = app
+
+    def get_id(self): 
+        if self.app is not None:
+            return self.app.get_id()
+        else:
+            return None
+
     def server_bind(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(self.server_address)
@@ -589,7 +590,7 @@ class KillThread(threading.Thread):
 class DaemonApp(object):
     def __init__(self, g_args, host='localhost', port=8000):
         self._server_address = (host, port)
-        self._httpd = MyTCPServer(self._server_address, HttpHandler)
+        self._httpd = MyTCPServer(self._server_address, HttpHandler, True,self)
         self._id = str(uuid.uuid4())
         self.server_con, self.client_con = multiprocessing.Pipe(False)
         g_args.custom_args['kill_client_con'] = self.client_con

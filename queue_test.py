@@ -289,7 +289,7 @@ class TestStringMethods(unittest.TestCase):
                 tq.enqueue_async({'topic':'.q1.normal','msg':'Msg1.',})
                 tq.enqueue_async({'topic':'.q1.normal','msg':'Msg2.',})
                 tq.enqueue_async({'topic':'.q1.normal','msg':'Msg3.',})
-                tq.enqueue_async({'topic':'.q1.kill','msg':'Kill!',})
+                #tq.enqueue_async({'topic':'.q1.kill','msg':'Kill!',})
                 app.start_app()
             except Exception as ex:
                 print(ex)
