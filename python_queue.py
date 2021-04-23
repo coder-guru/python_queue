@@ -19,7 +19,6 @@ import threading
 import socket
 import sys
 
-_app = None
 
 _manager = None
 #keep all instance of queue (for broadcast type of processing)
@@ -551,11 +550,12 @@ class kill_topic_handler(gen_queue):
 
 class HttpHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
-        if self.path.startswith('/' + str(self.server.get_id())):
+        if self.path.startswith('/' + str(self.server.get_app().get_id())):
             # TODO: check data and support other actions like sending message to a queue
             # content_length = int(self.headers['Content-Length']) # <--- Gets the size of data
             # post_data = self.rfile.read(content_length) # <--- Gets the data itself
             print('Requesting Shutdown...')
+            self.server.get_app().message_app_q({'topic':'.q1.kill','msg':'Kill!',})
             self.send_response(200, 'Shutdown request has been sent!')
             self.end_headers()
             print('Requesting Shutdown..Done.')
@@ -565,11 +565,7 @@ class MyTCPServer(socketserver.TCPServer):
         socketserver.TCPServer.__init__(self,server_address,RequestHandlerClass,bind_and_activate)
         self.app = app
 
-    def get_id(self): 
-        if self.app is not None:
-            return self.app.get_id()
-        else:
-            return None
+    def get_app(self): return self.app
 
     def server_bind(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -588,19 +584,26 @@ class KillThread(threading.Thread):
         self.app.get_server().shutdown()
 
 class DaemonApp(object):
-    def __init__(self, g_args, host='localhost', port=8000):
+    def __init__(self, g_args, host='localhost', port=8000,app_q=None):
         self._server_address = (host, port)
         self._httpd = MyTCPServer(self._server_address, HttpHandler, True,self)
         self._id = str(uuid.uuid4())
         self.server_con, self.client_con = multiprocessing.Pipe(False)
+        self.g_args = g_args
         g_args.custom_args['kill_client_con'] = self.client_con
         g_args.custom_args['app_id'] = self.get_id()
         g_args.custom_args['server_address'] = self._server_address
+        if app_q is not None:
+            g_args.custom_args['app_q'] = app_q.get_q()
         
     def get_server(self): return self._httpd
 
     def get_id(self): return self._id
     def get_server_address(self): return self._server_address
+
+    def message_app_q(self, msg):
+            item = gen_queue.get_queue_item(msg)
+            gen_queue.enqueue_q(self.g_args.custom_args['app_q'],self.g_args,item)
 
     def start_app(self):
         print('Starting Daemon.... id:{0}'.format(self.get_id()))

@@ -276,20 +276,19 @@ class TestStringMethods(unittest.TestCase):
 
     def test_server2(self):
         python_queue._manager = Manager()
-        g_args = global_args()    
-        app = DaemonApp(g_args,"localhost",8000)
-        python_queue._app = app
-        try:
+        g_args = global_args()
+        try:    
+            q_config = []
+            q_config.append(topic_config('.q1.normal.*', q1_topic_handler, 1))
+            q_config.append(topic_config('.q1.kill', kill_topic_handler, 1))
+            tq = gen_topic_queue(g_args,q_config, 1)
+            app = DaemonApp(g_args,"localhost",8000, tq)
             try:
-                q_config = []
-                q_config.append(topic_config('.q1.normal.*', q1_topic_handler, 1))
-                q_config.append(topic_config('.q1.kill', kill_topic_handler, 1))
-                tq = gen_topic_queue(g_args,q_config, 1)
                 tq.start()
                 tq.enqueue_async({'topic':'.q1.normal','msg':'Msg1.',})
                 tq.enqueue_async({'topic':'.q1.normal','msg':'Msg2.',})
                 tq.enqueue_async({'topic':'.q1.normal','msg':'Msg3.',})
-                #tq.enqueue_async({'topic':'.q1.kill','msg':'Kill!',})
+                tq.enqueue_async({'topic':'.q1.kill','msg':'Kill!',})
                 app.start_app()
             except Exception as ex:
                 print(ex)
