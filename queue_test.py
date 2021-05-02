@@ -5,15 +5,17 @@ import os
 import multiprocessing as mp
 from multiprocessing.managers import BaseManager
 from multiprocessing import Manager
+from app_dist_objects import handle_msg
 
 import time
 import sys
 
-from python_queue import my_queue, gen_topic_queue, topic_config, gen_queue, timer_queue
-from python_queue import trace_queue, message_loop, message_obj, message_handler,gc_queue
-from python_queue import global_args
-from python_queue import DaemonApp,kill_topic_handler
-import python_queue
+from dist_python_queue import my_queue, gen_topic_queue, topic_config, gen_queue, timer_queue
+from dist_python_queue import trace_queue, message_loop, message_obj,gc_queue
+from dist_python_queue import global_args
+from dist_python_queue import DaemonApp,kill_topic_handler,shared_manager
+import dist_python_queue
+from dist_python_queue import ST_SUCCESS, ST_FAIL
 
 class q1_topic_handler(gen_queue):
     def do_work_handler(self):
@@ -49,20 +51,16 @@ class calc_multiplier(gen_queue):
         v = v ** (v % 4)
 
 def my_handler():
-    return handle
-
-def handle(msg):
-        for i in range(msg * 5,(msg + 1) * 5):
-            print('loop {0}'.format(i))
-            yield
+    return handle_msg
 
 class TestStringMethods(unittest.TestCase):
-
+    _distributed = True
+    
     def test_one_worker(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = my_queue(g_args,1)
+            s = my_queue('test_one_worker',g_args,1)
             s.start()
             s.enqueue_async(2)
             s.enqueue_async(3)
@@ -72,10 +70,10 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_multiple_worker(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = my_queue(g_args,3)
+            s = my_queue('test_multiple_worker',g_args,3)
             s.start()
             for i in range(0,10):
                 s.enqueue_async(i)
@@ -85,27 +83,28 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_worker_await(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = my_queue(g_args,2)
+            s = my_queue('test_worker_await',g_args,2)
             s.start()
             for i in range(0,5):
                 wait = s.enqueue_async(i)
                 status,_ = s.enqueue_await(wait)
-                self.failIf(status is not python_queue.ST_SUCCESS())
+                print('wait done!')
+                self.assertTrue(status is ST_SUCCESS())
             s.stop()
         except Exception as ex:
             print(ex)
             self.fail(traceback.print_stack())
 
     def test_topic_queue(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
             q_config = []
             q_config.append(topic_config('.q1.*', my_queue, 1))
-            s = gen_topic_queue(g_args,q_config, 1)
+            s = gen_topic_queue('test_topic_queue',g_args,q_config, 1)
             s.start()
             for i in range(0,5):
                 s.enqueue_async({'topic':'.q1.number','num':i,})
@@ -115,13 +114,13 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_topic_queue_multi(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
             q_config = []
             q_config.append(topic_config('.q1.*', q1_topic_handler, 2))
             q_config.append(topic_config('.q2.*', q2_topic_handler, 2))
-            s = gen_topic_queue(g_args, q_config, 2)
+            s = gen_topic_queue('test_topic_queue_multi',g_args, q_config, 2)
             s.start()
             for i in range(0,10):
                 if i % 2 == 0:
@@ -136,13 +135,13 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_topic_queue_multi_large(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
             q_config = []
             q_config.append(topic_config('.q1.*', q1_topic_handler, 3))
             q_config.append(topic_config('.q2.*', q2_topic_handler, 3))
-            s = gen_topic_queue(g_args,q_config, 6)
+            s = gen_topic_queue('test_topic_queue_multi_large',g_args,q_config, 6)
             s.start()
             for i in range(0,10):
                 if i % 2 == 0:
@@ -155,14 +154,14 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_timer_queue(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
             q_config = []
             q_config.append(topic_config('.q1.*', q1_topic_handler, 1))
-            s = gen_topic_queue(g_args,q_config, 1)
+            s = gen_topic_queue('test_timer_queue',g_args,q_config, 1)
             s.start()
-            t = timer_queue(g_args,5,{'topic':'.q1.timer','msg':1,},s)
+            t = timer_queue('timer_test_timer_queue',g_args,5,{'topic':'.q1.timer','msg':1,},s)
             t.start()
             time.sleep(20)
             t.stop()
@@ -172,11 +171,11 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_queue_tracing(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = trace_queue(g_args,3)
-            t = my_queue(g_args,2)
+            s = trace_queue('trace_test_queue_tracing',g_args,3)
+            t = my_queue('test_queue_tracing',g_args,2)
             s.start()
             t.set_trace(s)
             t.start()
@@ -189,11 +188,11 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_message_loop(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = message_loop(g_args)
-            s1 = message_loop(g_args)
+            s = message_loop('test_message_loop',g_args)
+            s1 = message_loop('test_message_loop2',g_args)
             s.start()
             s1.start()
             for i in range(0,5):
@@ -209,34 +208,34 @@ class TestStringMethods(unittest.TestCase):
 
 
     def test_kill(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = my_queue(g_args,1)
+            s = my_queue('test_kill',g_args,1)
             s.start()
             for i in range(0,5):
                 wait = s.enqueue_async(i)
                 if i == 3:
                     pass
-                    self.failIf(s.kill(wait) == False)
+                    self.assertTrue(s.kill(wait) == True)
             s.stop()
         except Exception as ex:
             print(ex)
             self.fail(traceback.print_stack())
 
     def test_kill_all_cases(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = my_queue(g_args,1)
+            s = my_queue('test_kill_all_cases',g_args,1)
             s.start()
             #kill in not existing
-            self.failIf(s.kill('asdfgf;lkjhj') == True)
+            self.assertTrue(s.kill('asdfgf;lkjhj') == False)
             w1 = s.enqueue_async(1)
             w2 = s.enqueue_async(1)
             time.sleep(2)
-            self.failIf(s.kill(w1) == False)
-            self.failIf(s.kill(w2) == False)
+            self.assertTrue(s.kill(w1) == True)
+            self.assertTrue(s.kill(w2) == True)
             s.stop()
 
         except Exception as ex:
@@ -244,28 +243,28 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())        
 
     def test_error_msg(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = q1_topic_handler(g_args,1)
+            s = q1_topic_handler('test_error_msg',g_args,1)
             s.start()
             wait = s.enqueue_async({'topic':'.q1.timer','msg':'9999',})
             result, msg = s.enqueue_await(wait)
-            self.failIf(result is not python_queue.ST_FAIL())
+            self.assertTrue(result == ST_FAIL())
             print(msg)
             wait = s.enqueue_async({'topic':'.q1.timer','msg':'888',})
             result,_ = s.enqueue_await(wait)
-            self.failIf(result is not python_queue.ST_SUCCESS())
+            self.assertTrue(result == ST_SUCCESS())
             s.stop()
         except Exception as ex:
             print(ex)
             self.fail(traceback.print_stack())
 
     def test_load1(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = calc_multiplier(g_args,100)
+            s = calc_multiplier('test_load1',g_args,100)
             s.start()
             for i in range(0,10000):
                 s.enqueue_async(i)
@@ -275,13 +274,13 @@ class TestStringMethods(unittest.TestCase):
             self.fail(traceback.print_stack())
 
     def test_server2(self):
-        python_queue._manager = Manager()
-        g_args = global_args()
+        shared_manager.set_mode(False)
+        g_args = global_args(shared_manager)
         try:    
             q_config = []
             q_config.append(topic_config('.q1.normal.*', q1_topic_handler, 1))
             q_config.append(topic_config('.q1.kill', kill_topic_handler, 1))
-            tq = gen_topic_queue(g_args,q_config, 1)
+            tq = gen_topic_queue('test_server2',g_args,q_config, 1)
             app = DaemonApp(g_args,"localhost",8000, tq)
             try:
                 tq.start()
@@ -302,12 +301,12 @@ class TestStringMethods(unittest.TestCase):
             pass
 
     def test_gc_collect(self):
-        python_queue._manager = Manager()
-        g_args = global_args()    
+        shared_manager.set_distributed(TestStringMethods._distributed)
+        g_args = global_args(shared_manager)    
         try:
-            s = my_queue(g_args,1)
-            g = gc_queue(g_args)
-            t = timer_queue(g_args,5,{'topic':'.q4.gc','msg':1,},g)
+            s = my_queue('test_gc_collect',g_args,1)
+            g = gc_queue('gc_test_gc_collect',g_args)
+            t = timer_queue('timer_test_gc_collect',g_args,5,{'topic':'.q4.gc','msg':1,},g)
             g.start()
             s.start()
             t.start()
@@ -323,6 +322,28 @@ class TestStringMethods(unittest.TestCase):
             print(ex)
             self.fail(traceback.print_stack())
 
+def suite(distributed):
+    TestStringMethods._distributed = distributed
+    suite = unittest.TestSuite()
+    suite.addTest(TestStringMethods('test_one_worker'))
+    suite.addTest(TestStringMethods('test_multiple_worker'))
+    suite.addTest(TestStringMethods('test_worker_await'))
+    suite.addTest(TestStringMethods('test_topic_queue'))
+    suite.addTest(TestStringMethods('test_topic_queue_multi'))
+    suite.addTest(TestStringMethods('test_topic_queue_multi_large'))
+    suite.addTest(TestStringMethods('test_timer_queue'))
+    suite.addTest(TestStringMethods('test_message_loop'))
+    suite.addTest(TestStringMethods('test_kill'))
+    suite.addTest(TestStringMethods('test_kill_all_cases'))
+    suite.addTest(TestStringMethods('test_error_msg'))
+    suite.addTest(TestStringMethods('test_load1'))
+    suite.addTest(TestStringMethods('test_gc_collect'))
+    return suite
+
 
 if __name__ == '__main__':
-    unittest.main()
+    #unittest.main()
+    runner = unittest.TextTestRunner()
+    runner.run(suite(False))
+    runner.run(suite(True))
+
